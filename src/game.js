@@ -236,6 +236,19 @@
     'I only weigh 40 kilos!', 'I was paying half!', 'Not again, Boris!',
   ];
   const LEGAL_LINES = ['...thanks?', 'Finally, legroom.', 'Bye Kevin!', 'Much faster now.', "Wait, where's Dave?", 'Did we lose someone?'];
+  // solo riders are hard-working couriers (fictional delivery companies)
+  const COURIERS = [
+    { name: 'NOM', color: '#ff7a00' },
+    { name: 'GRUB', color: '#27ae60' },
+    { name: 'YUM!', color: '#e84393' },
+    { name: 'ZOOM', color: '#00a8e8' },
+    { name: 'BURP', color: '#f1c40f' },
+  ];
+  const COURIER_ANGRY = [
+    'MY TIPS!!', "That was someone's sushi!", 'The soup is now street soup!', "I'm rating YOU one star!",
+    'Order #4471 is RUINED!', 'Customer is gonna cry!', 'I had 2 minutes left!', 'Was that... a sponge?!',
+  ];
+  const FOOD_COLORS = ['#ffcc33', '#e74c3c', '#f5deb3', '#8b5a2b', '#2ecc71', '#fff'];
   const RIDER_ANGRY = ["I'M LEGAL!!", 'What did I do?!', 'Calling my lawyer!', 'I paid for this ride!', 'HEY! Wrong guy!', 'Ow! My dignity!'];
   const CLEANER_QUIPS = [
     'One scooter. One butt.', 'Rules are rules.', 'Sweep-sweep!', 'Clean streets, clean souls.',
@@ -302,7 +315,67 @@
     const t = e.touches[0];
     setMouse(t.clientX, t.clientY);
   }, { passive: false });
-  canvas.addEventListener('touchend', () => { mouse.down = false; });
+  canvas.addEventListener('touchend', () => { mouse.down = false; Tilt.enable(); });
+
+  // Tilt steering for phones: lean the phone to walk Boris around.
+  // Uses deviceorientation (beta/gamma are consistent across iOS and Android,
+  // unlike the raw accelerometer signs), converted into a gravity direction
+  // in screen space so it works in portrait and both landscape orientations.
+  // The pose the player holds when a round starts is "neutral".
+  const Tilt = (() => {
+    const T = {
+      supported: typeof DeviceOrientationEvent !== 'undefined',
+      touch: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+      active: false, asked: false,
+      x: 0, y: 0,          // filtered gravity in screen space
+      x0: 0, y0: 0,        // neutral pose
+      needCal: true,
+      mx: 0, my: 0,        // movement output, -1..1
+    };
+    const DEAD = 0.04;     // ~2.5° of slack so a steady hand doesn't drift
+    const FULL = 0.26;     // ~15° of lean for full speed
+    function screenAngle() {
+      if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+      return typeof window.orientation === 'number' ? window.orientation : 0;
+    }
+    function onOrient(e) {
+      if (e.beta == null || e.gamma == null) return;
+      T.active = true;
+      const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+      // direction a marble would roll, in device coords (x right, y down the screen)
+      const dx = Math.sin(g) * Math.cos(b), dy = Math.sin(b);
+      const a = screenAngle() * Math.PI / 180;
+      const sx = dx * Math.cos(a) + dy * Math.sin(a);
+      const sy = -dx * Math.sin(a) + dy * Math.cos(a);
+      if (T.needCal) { T.x = T.x0 = sx; T.y = T.y0 = sy; T.needCal = false; }
+      T.x += (sx - T.x) * 0.35;
+      T.y += (sy - T.y) * 0.35;
+    }
+    function axis(v) {
+      const m = Math.abs(v);
+      return m < DEAD ? 0 : Math.sign(v) * Math.min(1, (m - DEAD) / (FULL - DEAD));
+    }
+    T.enable = () => {
+      if (!T.supported || T.asked) return;
+      T.asked = true;
+      const listen = () => window.addEventListener('deviceorientation', onOrient);
+      // iOS 13+ needs explicit permission, granted from a user gesture
+      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then((r) => { if (r === 'granted') listen(); })
+          .catch(() => { T.asked = false; });
+      } else listen();
+    };
+    T.calibrate = () => { T.needCal = true; T.mx = T.my = 0; };
+    T.update = () => {
+      if (!T.active) { T.mx = T.my = 0; return; }
+      T.mx = axis(T.x - T.x0);
+      T.my = axis(T.y - T.y0);
+    };
+    window.addEventListener('orientationchange', () => T.calibrate());
+    return T;
+  })();
+  canvas.addEventListener('click', () => Tilt.enable());
 
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
@@ -342,6 +415,7 @@
     Sfx.init();
     newGame(false);
     state = 'play';
+    Tilt.calibrate();
     Sfx.start();
     cleanerSay('Another day, another freeloader.');
   }
@@ -350,7 +424,7 @@
     Sfx.init();
     if (state === 'title') start();
     else if (state === 'over' && overClickT <= 0) start();
-    else if (state === 'paused') state = 'play';
+    else if (state === 'paused') { state = 'play'; Tilt.calibrate(); }
   }
 
   function gameOver() {
@@ -365,9 +439,10 @@
   }
 
   // ---------------------------------------------------------------- entities
-  function makePerson(isRider, scruffy) {
+  function makePerson(isRider, scruffy, courier = null) {
     let hat = null;
-    if (scruffy) hat = Math.random() < 0.45 ? 'beanie' : (Math.random() < 0.3 ? 'cap' : null);
+    if (courier) hat = 'helmet';
+    else if (scruffy) hat = Math.random() < 0.45 ? 'beanie' : (Math.random() < 0.3 ? 'cap' : null);
     else if (isRider) hat = Math.random() < 0.35 ? 'helmet' : (Math.random() < 0.3 ? 'cap' : null);
     else if (Math.random() < 0.25) hat = 'cap';
     let item = null;
@@ -375,9 +450,9 @@
       item = scruffy ? pick(['bottle', 'bottle', 'chicken', 'phone']) : pick(['coffee', 'phone', 'balloon']);
     }
     return {
-      isRider, hat, scruffy, item,
+      isRider, hat, scruffy, item, courier,
       skin: pick(SKINS),
-      shirt: scruffy ? pick(DIRTY_SHIRTS) : pick(SHIRTS),
+      shirt: courier ? courier.color : scruffy ? pick(DIRTY_SHIRTS) : pick(SHIRTS),
       pants: scruffy ? pick(DIRTY_PANTS) : pick(PANTS),
       hair: pick(HAIRS),
       style: scruffy ? pick([1, 2, 3, 4, 5, 5]) : randi(0, 4),
@@ -413,7 +488,7 @@
       n = r < 0.6 ? 2 : r < 0.9 ? 3 : 4;
     }
     const people = [];
-    for (let i = 0; i < n; i++) people.push(makePerson(i === 0, n > 1));
+    for (let i = 0; i < n; i++) people.push(makePerson(i === 0, n > 1, n === 1 ? pick(COURIERS) : null));
     const speed = rand(70, 120) * Math.min(1.8, 1 + G.t / 150) * (1 - 0.07 * (n - 1)) * (0.8 + lane.s * 0.2);
     const sc = {
       lane: li, dir, x: startX, speed, people,
@@ -497,6 +572,14 @@
   function onHit(sc, i, q, sp) {
     splash(sp.x, sp.y, 16);
     Sfx.splat();
+    if (i === 0 && sc.people[0].courier) {
+      // a delivery guy just doing his job — dinner goes everywhere
+      say(sc.people[0], pick(COURIER_ANGRY), 2.4);
+      splash(q.x - 16 * sc.dir * q.s, q.y - 50 * q.s, 22, FOOD_COLORS);
+      crashScooter(sc, sp);
+      penalty('ORDER RUINED! 1★ REVIEW', q.x, q.y - 90);
+      return;
+    }
     if (i === 0) {
       // the driver is legal — splashing them is a scandal
       say(sc.people[0], pick(RIDER_ANGRY), 2.2);
@@ -567,6 +650,8 @@
       if (keys.d || keys.arrowright) mx += 1;
       if (keys.w || keys.arrowup) my -= 1;
       if (keys.s || keys.arrowdown) my += 1;
+      Tilt.update();
+      if (!mx && !my) { mx = Tilt.mx; my = Tilt.my; }
       c.x = clamp(c.x + mx * 270 * dt, 30, W - 30);
       c.y = clamp(c.y + my * 160 * dt, SIDEWALK_TOP + 5, SIDEWALK_BOTTOM);
       if (mx || my) c.walk += dt * 12;
@@ -613,7 +698,7 @@
       for (const p of sc.people) p.off += (p.target - p.off) * k;
 
       // littering
-      if (!G.demo && sc.x > 40 && sc.x < W - 40) {
+      if (!G.demo && !sc.people.every((p) => p.courier) && sc.x > 40 && sc.x < W - 40) { // couriers are too busy to litter
         sc.trashT -= dt;
         if (sc.trashT <= 0) {
           sc.trashT = rand(3, 7) * Math.max(0.5, 1 - G.t / 240);
@@ -895,6 +980,27 @@
       ctx.stroke();
     }
 
+    // courier's insulated delivery box, strapped to the back
+    if (p.courier) {
+      ctx.save();
+      if (flail) { ctx.translate(-14, -46); ctx.rotate(-0.35); ctx.translate(14, 46); }
+      ctx.fillStyle = p.courier.color;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      rrect(-31, -68, 24, 26, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.25)'; // lid
+      ctx.fillRect(-30, -67, 22, 5);
+      line(-31, -62, -7, -62, INK, 1.5);
+      ctx.save();
+      ctx.translate(-19, -51);
+      ctx.scale(dir, 1); // un-mirror so the logo reads correctly both ways
+      text(p.courier.name, 0, 0, p.courier.name.length > 3 ? 8 : 9, '#fff', 'center', 'middle');
+      ctx.restore();
+      ctx.restore();
+    }
+
     // legs
     if (flail) {
       limb(-3, -22, -11, -4, p.pants, 5);
@@ -967,7 +1073,7 @@
     // head
     circle(1, -55, 9, p.skin);
     if (p.hat === 'helmet') {
-      ctx.fillStyle = '#f5f5f5';
+      ctx.fillStyle = p.courier ? p.courier.color : '#f5f5f5';
       ctx.beginPath();
       ctx.arc(1, -56, 10.5, Math.PI, 0);
       ctx.closePath();
@@ -1394,8 +1500,13 @@
       'Riders toss litter (glowing rings). Walk Boris over it to sweep it into the cart.',
     ];
     lines.forEach((l, i) => text(l, W / 2, 225 + i * 32, i === 1 ? 24 : 18, i === 1 ? '#ffe066' : '#fff', 'center', 'middle'));
-    text('WASD / Arrows — move     Mouse — aim     Click / Space — throw', W / 2, 375, 16, '#9dd8ff', 'center', 'middle');
-    if (Math.floor(performance.now() / 500) % 2 === 0) text('CLICK TO START', W / 2, 440, 30, '#9dff6b', 'center', 'middle');
+    if (Tilt.touch) {
+      text('TILT the phone — walk     TAP — throw a sponge', W / 2, 365, 18, '#9dd8ff', 'center', 'middle');
+      text('Hold the phone comfortably when you start: that pose is "standing still".', W / 2, 392, 14, '#fff', 'center', 'middle');
+    } else {
+      text('WASD / Arrows — move     Mouse — aim     Click / Space — throw', W / 2, 375, 16, '#9dd8ff', 'center', 'middle');
+    }
+    if (Math.floor(performance.now() / 500) % 2 === 0) text(Tilt.touch ? 'TAP TO START' : 'CLICK TO START', W / 2, 440, 30, '#9dff6b', 'center', 'middle');
     if (best > 0) text(`Best: ${best}`, W / 2, 485, 16, '#fff', 'center', 'middle');
   }
 
